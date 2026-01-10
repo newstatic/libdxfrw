@@ -19,6 +19,10 @@ public:
     void setCodePage(std::string c, bool dxfFormat){setCodePage(&c, dxfFormat);}
     std::string getCodePage(){return cp;}
 
+    // Global fallback encoding setting (default: GBK for Chinese)
+    static void setFallbackEncoding(const std::string& enc);
+    static std::string getFallbackEncoding();
+
 private:
     std::string correctCodePage(const std::string& s);
 
@@ -26,6 +30,8 @@ private:
     int version;
     std::string cp;
     DRW_Converter *conv;
+
+    static std::string fallbackEncoding;
 };
 
 class DRW_Converter

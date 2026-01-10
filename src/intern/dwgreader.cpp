@@ -19,6 +19,9 @@
 #include "drw_textcodec.h"
 #include "drw_dbg.h"
 
+// Debug flag - weak symbol, default false if not provided by pydxfrw
+bool g_debugEnabled __attribute__((weak)) = false;
+
 dwgReader::~dwgReader(){
     for (std::map<duint32, DRW_LType*>::iterator it=ltypemap.begin(); it!=ltypemap.end(); ++it)
         delete(it->second);
@@ -1058,42 +1061,49 @@ bool dwgReader::readDwgEntity(dwgBuffer *dbuf, objHandle& obj, DRW_Interface& in
             DRW_DimOrdinate e;
             ENTRY_PARSE(e)
             e.style = findTableName(DRW::DIMSTYLE, e.dimStyleH.ref);
+            e.setName(findTableName(DRW::BLOCK_RECORD, e.blockH.ref));
             intfa.addDimOrdinate(&e);
             break; }
         case 21: {
             DRW_DimLinear e;
             ENTRY_PARSE(e)
             e.style = findTableName(DRW::DIMSTYLE, e.dimStyleH.ref);
+            e.setName(findTableName(DRW::BLOCK_RECORD, e.blockH.ref));
             intfa.addDimLinear(&e);
             break; }
         case 22: {
             DRW_DimAligned e;
             ENTRY_PARSE(e)
             e.style = findTableName(DRW::DIMSTYLE, e.dimStyleH.ref);
+            e.setName(findTableName(DRW::BLOCK_RECORD, e.blockH.ref));
             intfa.addDimAlign(&e);
             break; }
         case 23: {
             DRW_DimAngular3p e;
             ENTRY_PARSE(e)
             e.style = findTableName(DRW::DIMSTYLE, e.dimStyleH.ref);
+            e.setName(findTableName(DRW::BLOCK_RECORD, e.blockH.ref));
             intfa.addDimAngular3P(&e);
             break; }
         case 24: {
             DRW_DimAngular e;
             ENTRY_PARSE(e)
             e.style = findTableName(DRW::DIMSTYLE, e.dimStyleH.ref);
+            e.setName(findTableName(DRW::BLOCK_RECORD, e.blockH.ref));
             intfa.addDimAngular(&e);
             break; }
         case 25: {
             DRW_DimRadial e;
             ENTRY_PARSE(e)
             e.style = findTableName(DRW::DIMSTYLE, e.dimStyleH.ref);
+            e.setName(findTableName(DRW::BLOCK_RECORD, e.blockH.ref));
             intfa.addDimRadial(&e);
             break; }
         case 26: {
             DRW_DimDiametric e;
             ENTRY_PARSE(e)
             e.style = findTableName(DRW::DIMSTYLE, e.dimStyleH.ref);
+            e.setName(findTableName(DRW::BLOCK_RECORD, e.blockH.ref));
             intfa.addDimDiametric(&e);
             break; }
         case 45: {

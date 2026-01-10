@@ -11,6 +11,17 @@
 #include "drw_cptable949.h"
 #include "drw_cptable950.h"
 
+// Default to GBK for Chinese files (was SJIS)
+std::string DRW_TextCodec::fallbackEncoding = "GBK";
+
+void DRW_TextCodec::setFallbackEncoding(const std::string& enc) {
+    fallbackEncoding = enc;
+}
+
+std::string DRW_TextCodec::getFallbackEncoding() {
+    return fallbackEncoding;
+}
+
 DRW_TextCodec::DRW_TextCodec() {
     version = DRW::AC1021;
     conv = new DRW_Converter(NULL, 0);
@@ -93,13 +104,13 @@ void DRW_TextCodec::setCodePage(std::string *c, bool dxfFormat){
             conv = new DRW_ConvTable(DRW_Table1258, CPLENGHTCOMMON);
         else if (cp == "UTF-8") { //DXF older than 2007 are write in win codepages
             cp = "ANSI_1252";
-            conv = new DRW_ExtConverter("SJIS");
+            conv = new DRW_ExtConverter(fallbackEncoding.c_str());
         } else {
-            conv = new DRW_ExtConverter("SJIS");
+            conv = new DRW_ExtConverter(fallbackEncoding.c_str());
         }
     } else {
         if (min_ver <= DRW::AC1018) {
-            conv = new DRW_ExtConverter("SJIS");
+            conv = new DRW_ExtConverter(fallbackEncoding.c_str());
         } else {
             if (dxfFormat)
                 conv = new DRW_Converter(NULL, 0);//utf16 to utf8
