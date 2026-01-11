@@ -11,6 +11,7 @@
 ******************************************************************************/
 
 #include <cstdlib>
+#include <cstdio>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -185,6 +186,29 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
     duint32 bs = 0; //bit size of handle stream 2010+
     duint8 *tmpByteStr;
 
+    // Counters for parse success/failure tracking
+    int ltSuccess = 0, ltFail = 0;
+    int laySuccess = 0, layFail = 0;
+    int stySuccess = 0, styFail = 0;
+    int dimSuccess = 0, dimFail = 0;
+    int vpSuccess = 0, vpFail = 0;
+    int brSuccess = 0, brFail = 0;
+    int appSuccess = 0, appFail = 0;
+    bool ltCtrlOk = false, layCtrlOk = false, styCtrlOk = false;
+    bool dimCtrlOk = false, vpCtrlOk = false, brCtrlOk = false, appCtrlOk = false;
+    int styNotFound = 0, dimNotFound = 0;
+    int styLoopCount = 0;
+    // Suppress unused variable warnings
+    (void)ltSuccess; (void)ltFail;
+    (void)laySuccess; (void)layFail;
+    (void)stySuccess; (void)dimSuccess; (void)dimFail;
+    (void)vpSuccess; (void)vpFail;
+    (void)brSuccess; (void)brFail;
+    (void)appSuccess; (void)appFail;
+    (void)ltCtrlOk; (void)layCtrlOk; (void)styCtrlOk;
+    (void)dimCtrlOk; (void)vpCtrlOk; (void)brCtrlOk; (void)appCtrlOk;
+    (void)styNotFound; (void)dimNotFound; (void)styLoopCount;
+
     //parse linetypes, start with linetype Control
     mit = ObjectMap.find(hdr.linetypeCtrl);
     if (mit==ObjectMap.end()) {
@@ -212,7 +236,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 ret = false;
             } else { //reset position
             cbuff.resetPosition();
-            ret2 = ltControl.parseDwg(version, &cbuff, bs);
+            ret2 = ltControl.parseDwg(version, &cbuff, bs); ltCtrlOk = ret2;
             if(ret)
                 ret = ret2;
         }
@@ -238,6 +262,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 dbuf->getBytes(tmpByteStr, lsize);
                 dwgBuffer lbuff(tmpByteStr, lsize, &decoder);
                 ret2 = lt->parseDwg(version, &lbuff, bs);
+                if (ret2) ltSuccess++; else ltFail++;
                 ltypemap[lt->handle] = lt;
                 if(ret)
                     ret = ret2;
@@ -273,7 +298,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 ret = false;
             } else { //reset position
             buff.resetPosition();
-            ret2 = layControl.parseDwg(version, &buff, bs);
+            ret2 = layControl.parseDwg(version, &buff, bs); layCtrlOk = ret2;
             if(ret)
                 ret = ret2;
         }
@@ -298,6 +323,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 dbuf->getBytes(tmpByteStr, size);
                 dwgBuffer buff(tmpByteStr, size, &decoder);
                 ret2 = la->parseDwg(version, &buff, bs);
+                if (ret2) laySuccess++; else layFail++;
                 layermap[la->handle] = la;
                 if(ret)
                     ret = ret2;
@@ -343,17 +369,20 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 ret = false;
             } else { //reset position
             buff.resetPosition();
-            ret2 = styControl.parseDwg(version, &buff, bs);
+            ret2 = styControl.parseDwg(version, &buff, bs); styCtrlOk = ret2;
             if(ret)
                 ret = ret2;
         }
         delete[]tmpByteStr;
         for (std::list<duint32>::iterator it=styControl.hadlesList.begin(); it != styControl.hadlesList.end(); ++it){
+            styLoopCount++;
             mit = ObjectMap.find(*it);
             if (mit==ObjectMap.end()) {
                 DRW_DBG("\nWARNING: Style not found\n");
+                styNotFound++;
                 ret = false;
             } else {
+                stySuccess++;
                 oc = mit->second;
                 ObjectMap.erase(mit);
                 DRW_DBG("Style Handle= "); DRW_DBGH(oc.handle); DRW_DBG(" "); DRW_DBG(oc.loc); DRW_DBG("\n");
@@ -367,14 +396,25 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 tmpByteStr = new duint8[size];
                 dbuf->getBytes(tmpByteStr, size);
                 dwgBuffer buff(tmpByteStr, size, &decoder);
+                int posBefore = buff.getPosition();
                 ret2 = sty->parseDwg(version, &buff, bs);
+                int posAfter = buff.getPosition();
+                if (!ret2) {
+                    styFail++;
+                    fprintf(stderr, "[TABLES] TextStyle FAIL (non-fatal): handle=%u name='%s' bufSize=%d bs=%u posBefore=%d posAfter=%d remaining=%d isGood=%d\n",
+                            oc.handle, sty->name.c_str(), size, bs, posBefore, posAfter, buff.numRemainingBytes(), buff.isGood());
+                    fflush(stderr);
+                    // Don't fail the entire table read for individual style parse failures
+                    // The style is still added to stylemap with partial data
+                }
                 stylemap[sty->handle] = sty;
-                if(ret)
-                    ret = ret2;
+                // Note: We no longer set ret = ret2 here to avoid failing entire TABLES
+                // for individual TextStyle parse errors (which are often recoverable)
                 delete[]tmpByteStr;
             }
         }
     }
+
 
     //parse dim styles, start with dimstyle Control
     mit = ObjectMap.find(hdr.dimstyleCtrl);
@@ -403,7 +443,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 ret = false;
             } else { //reset position
             buff.resetPosition();
-            ret2 = dimstyControl.parseDwg(version, &buff, bs);
+            ret2 = dimstyControl.parseDwg(version, &buff, bs); dimCtrlOk = ret2;
             if(ret)
                 ret = ret2;
         }
@@ -463,7 +503,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 ret = false;
             } else { //reset position
             buff.resetPosition();
-            ret2 = vportControl.parseDwg(version, &buff, bs);
+            ret2 = vportControl.parseDwg(version, &buff, bs); vpCtrlOk = ret2;
             if(ret)
                 ret = ret2;
         }
@@ -488,6 +528,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 dbuf->getBytes(tmpByteStr, size);
                 dwgBuffer buff(tmpByteStr, size, &decoder);
                 ret2 = vp->parseDwg(version, &buff, bs);
+                if (ret2) vpSuccess++; else vpFail++;
                 vportmap[vp->handle] = vp;
                 if(ret)
                     ret = ret2;
@@ -523,7 +564,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 ret = false;
             } else { //reset position
             buff.resetPosition();
-            ret2 = blockControl.parseDwg(version, &buff, bs);
+            ret2 = blockControl.parseDwg(version, &buff, bs); brCtrlOk = ret2;
             if(ret)
                 ret = ret2;
         }
@@ -548,6 +589,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 dbuf->getBytes(tmpByteStr, size);
                 dwgBuffer buff(tmpByteStr, size, &decoder);
                 ret2 = br->parseDwg(version, &buff, bs);
+                if (ret2) brSuccess++; else brFail++;
                 blockRecordmap[br->handle] = br;
                 if(ret)
                     ret = ret2;
@@ -584,7 +626,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 ret = false;
             } else { //reset position
             buff.resetPosition();
-            ret2 = appIdControl.parseDwg(version, &buff, bs);
+            ret2 = appIdControl.parseDwg(version, &buff, bs); appCtrlOk = ret2;
             if(ret)
                 ret = ret2;
         }
@@ -609,6 +651,7 @@ bool dwgReader::readDwgTables(DRW_Header& hdr, dwgBuffer *dbuf) {
                 dbuf->getBytes(tmpByteStr, size);
                 dwgBuffer buff(tmpByteStr, size, &decoder);
                 ret2 = ai->parseDwg(version, &buff, bs);
+                if (ret2) appSuccess++; else appFail++;
                 appIdmap[ai->handle] = ai;
                 if(ret)
                     ret = ret2;

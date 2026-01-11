@@ -12,6 +12,7 @@
 
 
 #include "libdwgr.h"
+#include <cstdio>
 #include <fstream>
 #include <algorithm>
 #include <sstream>

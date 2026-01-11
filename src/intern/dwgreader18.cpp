@@ -11,6 +11,7 @@
 ******************************************************************************/
 
 #include <cstdlib>
+#include <cstdio>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -585,9 +586,7 @@ bool dwgReader18::readDwgTables(DRW_Header& hdr) {
     if (ret) {
 
         dwgBuffer dataBuf(objData, uncompSize, &decoder);
-
         ret = dwgReader::readDwgTables(hdr, &dataBuf);
-
     }
     //Do not delete objData in this point, needed in the remaining code
     return ret;

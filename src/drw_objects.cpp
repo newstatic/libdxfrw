@@ -11,6 +11,7 @@
 ******************************************************************************/
 
 #include <iostream>
+#include <cstdio>
 #include <cmath>
 #include "drw_objects.h"
 #include "intern/dxfreader.h"

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <map>
 #include <iostream>
+#include <cstdio>
 
 #include "../src/libdxfrw.h"
 #include "../src/libdwgr.h"
@@ -21,8 +22,8 @@
 
 namespace py = pybind11;
 
-// Global debug flag (default: enabled)
-static bool g_debugEnabled = true;
+// Global debug flag (default: disabled for production)
+static bool g_debugEnabled = false;
 
 void setDebugEnabled(bool enabled) {
     g_debugEnabled = enabled;
