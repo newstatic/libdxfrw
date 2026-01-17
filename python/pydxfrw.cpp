@@ -115,6 +115,29 @@ struct PyLWPolyline {
     double elevation;
 };
 
+// POLYLINE entity (old-style 2D/3D polyline, different from LWPOLYLINE)
+struct PyPolyline {
+    std::vector<PyPolylineVertex> vertices;
+    int flags;           // 1=closed, 8=3D, 16=3D mesh, 32=mesh closed N, 64=polyface
+    std::string layer;
+    double elevation;
+
+    bool isClosed() const { return (flags & 1) != 0; }
+    bool is3D() const { return (flags & 8) != 0; }
+};
+
+// SPLINE entity
+struct PySpline {
+    int flags;           // Spline flags
+    int degree;          // Degree of the spline
+    std::vector<double> knots;           // Knot values
+    std::vector<PyCoord> controlPoints;  // Control points
+    std::vector<PyCoord> fitPoints;      // Fit points
+    std::string layer;
+
+    bool isClosed() const { return (flags & 1) != 0; }
+};
+
 struct PyInsert {
     std::string blockName;
     PyCoord position;
@@ -142,6 +165,8 @@ struct PyBlock {
     std::vector<PyCircle> circles;
     std::vector<PyArc> arcs;
     std::vector<PyLWPolyline> lwpolylines;
+    std::vector<PyPolyline> polylines;    // Old-style polylines
+    std::vector<PySpline> splines;        // Spline curves
     std::vector<PyText> texts;
     std::vector<PyMText> mtexts;  // MTEXT entities (used for dimension text in *D blocks)
     std::vector<PyEllipse> ellipses;
@@ -218,6 +243,8 @@ struct PyDxfData {
     std::vector<PyCircle> circles;
     std::vector<PyArc> arcs;
     std::vector<PyLWPolyline> lwpolylines;
+    std::vector<PyPolyline> polylines;    // Old-style polylines
+    std::vector<PySpline> splines;        // Spline curves
     std::vector<PyEllipse> ellipses;
     std::vector<PyInsert> inserts;
     std::vector<PyBlock> blocks;
@@ -229,6 +256,8 @@ struct PyDxfData {
     std::vector<PyCircle> expandedCircles;
     std::vector<PyArc> expandedArcs;
     std::vector<PyLWPolyline> expandedPolylines;
+    std::vector<PyPolyline> expandedOldPolylines;  // Expanded old-style polylines
+    std::vector<PySpline> expandedSplines;          // Expanded splines
     std::vector<PyText> expandedTexts;
     std::vector<PyMText> expandedMTexts;  // Expanded MTEXT (from blocks including *D dimension blocks)
     std::vector<PyEllipse> expandedEllipses;
@@ -323,6 +352,13 @@ public:
 
     // Entities
     void addPoint(const DRW_Point& point) override {
+        if (g_debugEnabled) {
+            static int pointCount = 0;
+            pointCount++;
+            if (pointCount <= 5) {
+                std::cerr << "[DEBUG POINT #" << pointCount << "] layer=" << point.layer << std::endl;
+            }
+        }
         data.totalEntities++;
     }
 
@@ -434,10 +470,83 @@ public:
     }
 
     void addPolyline(const DRW_Polyline& polyline) override {
+        PyPolyline pp;
+        pp.flags = polyline.flags;
+        pp.layer = polyline.layer;
+        pp.elevation = polyline.basePoint.z;
+
+        // Copy vertices
+        for (const auto& vert : polyline.vertlist) {
+            PyPolylineVertex pv;
+            pv.x = vert->basePoint.x;
+            pv.y = vert->basePoint.y;
+            pv.z = vert->basePoint.z;
+            pv.bulge = vert->bulge;
+            pp.vertices.push_back(pv);
+        }
+
+        if (g_debugEnabled) {
+            static int polylineCount = 0;
+            polylineCount++;
+            std::cerr << "[DEBUG POLYLINE #" << polylineCount << "] layer=" << polyline.layer
+                      << " vertexcount=" << polyline.vertlist.size()
+                      << " flags=" << polyline.flags << std::endl;
+        }
+
+        if (inBlock) {
+            PyBlock* block = getCurrentBlock();
+            if (block) {
+                block->polylines.push_back(pp);
+            }
+        } else {
+            data.polylines.push_back(pp);
+        }
         data.totalEntities++;
     }
 
     void addSpline(const DRW_Spline* spline) override {
+        if (!spline) {
+            data.totalEntities++;
+            return;
+        }
+
+        PySpline ps;
+        ps.flags = spline->flags;
+        ps.degree = spline->degree;
+        ps.layer = spline->layer;
+
+        // Copy knots
+        for (const auto& knot : spline->knotslist) {
+            ps.knots.push_back(knot);
+        }
+
+        // Copy control points
+        for (const auto& cp : spline->controllist) {
+            ps.controlPoints.push_back(PyCoord(cp->x, cp->y, cp->z));
+        }
+
+        // Copy fit points
+        for (const auto& fp : spline->fitlist) {
+            ps.fitPoints.push_back(PyCoord(fp->x, fp->y, fp->z));
+        }
+
+        if (g_debugEnabled) {
+            static int splineCount = 0;
+            splineCount++;
+            std::cerr << "[DEBUG SPLINE #" << splineCount << "] layer=" << spline->layer
+                      << " degree=" << spline->degree
+                      << " ncontrol=" << spline->ncontrol
+                      << " nfit=" << spline->nfit << std::endl;
+        }
+
+        if (inBlock) {
+            PyBlock* block = getCurrentBlock();
+            if (block) {
+                block->splines.push_back(ps);
+            }
+        } else {
+            data.splines.push_back(ps);
+        }
         data.totalEntities++;
     }
 
@@ -477,14 +586,29 @@ public:
     }
 
     void addTrace(const DRW_Trace& trace) override {
+        if (g_debugEnabled) {
+            static int traceCount = 0;
+            traceCount++;
+            std::cerr << "[DEBUG TRACE #" << traceCount << "] layer=" << trace.layer << std::endl;
+        }
         data.totalEntities++;
     }
 
     void add3dFace(const DRW_3Dface& face) override {
+        if (g_debugEnabled) {
+            static int faceCount = 0;
+            faceCount++;
+            std::cerr << "[DEBUG 3DFACE #" << faceCount << "] layer=" << face.layer << std::endl;
+        }
         data.totalEntities++;
     }
 
     void addSolid(const DRW_Solid& solid) override {
+        if (g_debugEnabled) {
+            static int solidCount = 0;
+            solidCount++;
+            std::cerr << "[DEBUG SOLID #" << solidCount << "] layer=" << solid.layer << std::endl;
+        }
         data.totalEntities++;
     }
 
@@ -783,6 +907,8 @@ public:
         data.expandedCircles = data.circles;
         data.expandedArcs = data.arcs;
         data.expandedPolylines = data.lwpolylines;
+        data.expandedOldPolylines = data.polylines;  // Copy old-style polylines
+        data.expandedSplines = data.splines;          // Copy splines
         data.expandedTexts = data.texts;
         data.expandedMTexts = data.mtexts;  // Copy model space MTEXT
         data.expandedEllipses = data.ellipses;
@@ -863,7 +989,8 @@ private:
             PyLine expanded;
             expanded.start = line.start.transform(pos, xScale, yScale, angle);
             expanded.end = line.end.transform(pos, xScale, yScale, angle);
-            expanded.layer = line.layer;
+            // Layer "0" inherits INSERT's layer (DWG/DXF standard)
+            expanded.layer = (line.layer == "0") ? insert.layer : line.layer;
             data.expandedLines.push_back(expanded);
         }
 
@@ -872,18 +999,56 @@ private:
             PyCircle expanded;
             expanded.center = circle.center.transform(pos, xScale, yScale, angle);
             expanded.radius = circle.radius * std::abs(xScale);  // Assume uniform scale for circles
-            expanded.layer = circle.layer;
+            // Layer "0" inherits INSERT's layer (DWG/DXF standard)
+            expanded.layer = (circle.layer == "0") ? insert.layer : circle.layer;
             data.expandedCircles.push_back(expanded);
         }
 
         // Expand arcs
+        // Note: arc.startAngle and arc.endAngle are in RADIANS (from DXF spec)
         for (const auto& arc : block->arcs) {
             PyArc expanded;
             expanded.center = arc.center.transform(pos, xScale, yScale, angle);
             expanded.radius = arc.radius * std::abs(xScale);
-            expanded.startAngle = arc.startAngle + angle * 180.0 / M_PI;
-            expanded.endAngle = arc.endAngle + angle * 180.0 / M_PI;
-            expanded.layer = arc.layer;
+
+            // Convert arc angles from radians to degrees first
+            double startDeg = arc.startAngle * 180.0 / M_PI;
+            double endDeg = arc.endAngle * 180.0 / M_PI;
+
+            // Handle vertical flip (yScale < 0)
+            if (yScale < 0) {
+                // Flip angles: angle = 360 - angle, and swap start/end
+                double temp = 360.0 - endDeg;
+                endDeg = 360.0 - startDeg;
+                startDeg = temp;
+            }
+
+            // Handle horizontal flip (xScale < 0)
+            if (xScale < 0) {
+                // Flip angles: angle = 180 - angle, and swap start/end
+                double temp = 180.0 - endDeg;
+                endDeg = 180.0 - startDeg;
+                startDeg = temp;
+            }
+
+            // Apply rotation (angle is in radians, convert to degrees)
+            double rotationDeg = angle * 180.0 / M_PI;
+            startDeg += rotationDeg;
+            endDeg += rotationDeg;
+
+            // Normalize to 0-360
+            while (startDeg < 0) startDeg += 360.0;
+            while (startDeg >= 360.0) startDeg -= 360.0;
+            while (endDeg < 0) endDeg += 360.0;
+            while (endDeg >= 360.0) endDeg -= 360.0;
+
+            // Convert back to radians for consistent output
+            expanded.startAngle = startDeg * M_PI / 180.0;
+            expanded.endAngle = endDeg * M_PI / 180.0;
+
+            // Layer inheritance: if block entity layer is "0", use INSERT's layer
+            expanded.layer = (arc.layer == "0") ? insert.layer : arc.layer;
+
             data.expandedArcs.push_back(expanded);
         }
 
@@ -891,7 +1056,8 @@ private:
         for (const auto& poly : block->lwpolylines) {
             PyLWPolyline expanded;
             expanded.closed = poly.closed;
-            expanded.layer = poly.layer;
+            // Layer "0" inherits INSERT's layer (DWG/DXF standard)
+            expanded.layer = (poly.layer == "0") ? insert.layer : poly.layer;
             expanded.elevation = poly.elevation;
             for (const auto& v : poly.vertices) {
                 PyCoord vc(v.x, v.y, v.z);
@@ -900,7 +1066,8 @@ private:
                 ev.x = tv.x;
                 ev.y = tv.y;
                 ev.z = tv.z;
-                ev.bulge = v.bulge;  // Bulge may need adjustment for scale
+                // Bulge sign flips for negative scales (mirroring)
+                ev.bulge = (xScale * yScale < 0) ? -v.bulge : v.bulge;
                 expanded.vertices.push_back(ev);
             }
             data.expandedPolylines.push_back(expanded);
@@ -913,7 +1080,8 @@ private:
             expanded.position = text.position.transform(pos, xScale, yScale, angle);
             expanded.height = text.height * std::abs(yScale);
             expanded.angle = text.angle + angle * 180.0 / M_PI;
-            expanded.layer = text.layer;
+            // Layer "0" inherits INSERT's layer (DWG/DXF standard)
+            expanded.layer = (text.layer == "0") ? insert.layer : text.layer;
             expanded.style = text.style;
             data.expandedTexts.push_back(expanded);
         }
@@ -925,7 +1093,8 @@ private:
             expanded.position = mtext.position.transform(pos, xScale, yScale, angle);
             expanded.height = mtext.height * std::abs(yScale);
             expanded.angle = mtext.angle + angle * 180.0 / M_PI;
-            expanded.layer = mtext.layer;
+            // Layer "0" inherits INSERT's layer (DWG/DXF standard)
+            expanded.layer = (mtext.layer == "0") ? insert.layer : mtext.layer;
             expanded.style = mtext.style;
             expanded.interlin = mtext.interlin;
             data.expandedMTexts.push_back(expanded);
@@ -947,8 +1116,50 @@ private:
             expanded.ratio = ellipse.ratio * (std::abs(yScale) / std::abs(xScale));
             expanded.startAngle = ellipse.startAngle;
             expanded.endAngle = ellipse.endAngle;
-            expanded.layer = ellipse.layer;
+            // Layer "0" inherits INSERT's layer (DWG/DXF standard)
+            expanded.layer = (ellipse.layer == "0") ? insert.layer : ellipse.layer;
             data.expandedEllipses.push_back(expanded);
+        }
+
+        // Expand old-style polylines
+        for (const auto& poly : block->polylines) {
+            PyPolyline expanded;
+            expanded.flags = poly.flags;
+            expanded.layer = (poly.layer == "0") ? insert.layer : poly.layer;
+            expanded.elevation = poly.elevation;
+            for (const auto& v : poly.vertices) {
+                PyCoord vc(v.x, v.y, v.z);
+                PyCoord tv = vc.transform(pos, xScale, yScale, angle);
+                PyPolylineVertex ev;
+                ev.x = tv.x;
+                ev.y = tv.y;
+                ev.z = tv.z;
+                // Bulge sign may need to flip for negative scales
+                ev.bulge = (xScale * yScale < 0) ? -v.bulge : v.bulge;
+                expanded.vertices.push_back(ev);
+            }
+            data.expandedOldPolylines.push_back(expanded);
+        }
+
+        // Expand splines
+        for (const auto& spline : block->splines) {
+            PySpline expanded;
+            expanded.flags = spline.flags;
+            expanded.degree = spline.degree;
+            expanded.layer = (spline.layer == "0") ? insert.layer : spline.layer;
+            expanded.knots = spline.knots;  // Knots don't change with transform
+
+            // Transform control points
+            for (const auto& cp : spline.controlPoints) {
+                expanded.controlPoints.push_back(cp.transform(pos, xScale, yScale, angle));
+            }
+
+            // Transform fit points
+            for (const auto& fp : spline.fitPoints) {
+                expanded.fitPoints.push_back(fp.transform(pos, xScale, yScale, angle));
+            }
+
+            data.expandedSplines.push_back(expanded);
         }
 
         // Recursively expand nested inserts
@@ -1114,6 +1325,27 @@ PYBIND11_MODULE(pydxfrw, m) {
         .def_readwrite("layer", &PyLWPolyline::layer)
         .def_readwrite("elevation", &PyLWPolyline::elevation);
 
+    // Old-style Polyline (POLYLINE entity)
+    py::class_<PyPolyline>(m, "Polyline")
+        .def(py::init<>())
+        .def_readwrite("vertices", &PyPolyline::vertices)
+        .def_readwrite("flags", &PyPolyline::flags)
+        .def_readwrite("layer", &PyPolyline::layer)
+        .def_readwrite("elevation", &PyPolyline::elevation)
+        .def("is_closed", &PyPolyline::isClosed)
+        .def("is_3d", &PyPolyline::is3D);
+
+    // Spline
+    py::class_<PySpline>(m, "Spline")
+        .def(py::init<>())
+        .def_readwrite("flags", &PySpline::flags)
+        .def_readwrite("degree", &PySpline::degree)
+        .def_readwrite("knots", &PySpline::knots)
+        .def_readwrite("control_points", &PySpline::controlPoints)
+        .def_readwrite("fit_points", &PySpline::fitPoints)
+        .def_readwrite("layer", &PySpline::layer)
+        .def("is_closed", &PySpline::isClosed);
+
     // Insert (block reference)
     py::class_<PyInsert>(m, "Insert")
         .def(py::init<>())
@@ -1145,6 +1377,8 @@ PYBIND11_MODULE(pydxfrw, m) {
         .def_readwrite("circles", &PyBlock::circles)
         .def_readwrite("arcs", &PyBlock::arcs)
         .def_readwrite("lwpolylines", &PyBlock::lwpolylines)
+        .def_readwrite("polylines", &PyBlock::polylines)
+        .def_readwrite("splines", &PyBlock::splines)
         .def_readwrite("texts", &PyBlock::texts)
         .def_readwrite("mtexts", &PyBlock::mtexts)
         .def_readwrite("ellipses", &PyBlock::ellipses)
@@ -1213,6 +1447,8 @@ PYBIND11_MODULE(pydxfrw, m) {
         .def_readwrite("circles", &PyDxfData::circles)
         .def_readwrite("arcs", &PyDxfData::arcs)
         .def_readwrite("lwpolylines", &PyDxfData::lwpolylines)
+        .def_readwrite("polylines", &PyDxfData::polylines)
+        .def_readwrite("splines", &PyDxfData::splines)
         .def_readwrite("ellipses", &PyDxfData::ellipses)
         .def_readwrite("inserts", &PyDxfData::inserts)
         .def_readwrite("blocks", &PyDxfData::blocks)
@@ -1223,6 +1459,8 @@ PYBIND11_MODULE(pydxfrw, m) {
         .def_readwrite("expanded_circles", &PyDxfData::expandedCircles)
         .def_readwrite("expanded_arcs", &PyDxfData::expandedArcs)
         .def_readwrite("expanded_polylines", &PyDxfData::expandedPolylines)
+        .def_readwrite("expanded_old_polylines", &PyDxfData::expandedOldPolylines)
+        .def_readwrite("expanded_splines", &PyDxfData::expandedSplines)
         .def_readwrite("expanded_texts", &PyDxfData::expandedTexts)
         .def_readwrite("expanded_mtexts", &PyDxfData::expandedMTexts)
         .def_readwrite("expanded_ellipses", &PyDxfData::expandedEllipses)
