@@ -12,6 +12,8 @@
 #include <map>
 #include <iostream>
 #include <cstdio>
+#include <sstream>
+#include <iomanip>
 
 #include "../src/libdxfrw.h"
 #include "../src/libdwgr.h"
@@ -101,6 +103,7 @@ struct PyArc {
     double startAngle;
     double endAngle;
     std::string layer;
+    PyCoord extrusion{0, 0, 1};  // Extrusion direction (default: +Z)
 };
 
 struct PyPolylineVertex {
@@ -144,6 +147,8 @@ struct PyInsert {
     double xScale, yScale, zScale;
     double angle;
     std::string layer;
+    PyCoord extrusion{0, 0, 1};  // Extrusion direction (default: +Z)
+    std::string handle;  // Entity handle for debugging
 };
 
 // Ellipse structure (defined before PyBlock since PyBlock contains ellipses)
@@ -394,6 +399,7 @@ public:
         pa.startAngle = arc.staangle;
         pa.endAngle = arc.endangle;
         pa.layer = arc.layer;
+        pa.extrusion = PyCoord(arc.extPoint);  // Save extrusion direction
 
         if (inBlock) {
             PyBlock* block = getCurrentBlock();
@@ -561,6 +567,11 @@ public:
         pi.zScale = insert.zscale;
         pi.angle = insert.angle;
         pi.layer = insert.layer;
+        pi.extrusion = PyCoord(insert.extPoint);  // Save extrusion direction
+        // Convert handle to hex string for debugging
+        std::ostringstream oss;
+        oss << std::hex << insert.handle;
+        pi.handle = oss.str();
 
         // Debug log for inserts (controlled by g_debugEnabled)
         if (g_debugEnabled) {
@@ -905,7 +916,38 @@ public:
         // First, copy model space entities to expanded lists
         data.expandedLines = data.lines;
         data.expandedCircles = data.circles;
-        data.expandedArcs = data.arcs;
+
+        // For arcs, apply extrusion transformation (OCS to WCS)
+        // When extrusion.z < 0, the arc needs to be mirrored
+        data.expandedArcs.clear();
+        for (const auto& arc : data.arcs) {
+            PyArc expanded = arc;  // Copy all properties
+
+            // Check arc's extrusion: when extrusion.z < 0, mirror the arc
+            if (std::fabs(arc.extrusion.x) < 0.015625 &&
+                std::fabs(arc.extrusion.y) < 0.015625 &&
+                arc.extrusion.z < 0) {
+                // Mirror the arc angles: angle = 180 - angle, swap start/end
+                double startDeg = arc.startAngle * 180.0 / M_PI;
+                double endDeg = arc.endAngle * 180.0 / M_PI;
+
+                double temp = 180.0 - endDeg;
+                endDeg = 180.0 - startDeg;
+                startDeg = temp;
+
+                // Normalize to 0-360
+                while (startDeg < 0) startDeg += 360.0;
+                while (startDeg >= 360.0) startDeg -= 360.0;
+                while (endDeg < 0) endDeg += 360.0;
+                while (endDeg >= 360.0) endDeg -= 360.0;
+
+                expanded.startAngle = startDeg * M_PI / 180.0;
+                expanded.endAngle = endDeg * M_PI / 180.0;
+            }
+
+            data.expandedArcs.push_back(expanded);
+        }
+
         data.expandedPolylines = data.lwpolylines;
         data.expandedOldPolylines = data.polylines;  // Copy old-style polylines
         data.expandedSplines = data.splines;          // Copy splines
@@ -966,7 +1008,7 @@ public:
 private:
     void expandInsert(const PyInsert& insert, const PyCoord& parentPos,
                       double parentXScale, double parentYScale, double parentAngle,
-                      int depth) {
+                      int depth, const std::string& parentHandle = "") {
         if (depth <= 0) return;
 
         // Find the block
@@ -979,7 +1021,42 @@ private:
         // Calculate combined transform
         double xScale = parentXScale * insert.xScale;
         double yScale = parentYScale * insert.yScale;
-        double angle = parentAngle + insert.angle;
+
+        // FIX: Nested INSERT mirror transformation bug
+        //
+        // Problem: When parent INSERT has xScale=-1 (mirror), nested INSERT's angle
+        // must be negated to maintain correct geometry.
+        //
+        // Root cause: Mirror transformation (xScale=-1) flips the coordinate system
+        // along the Y-axis. In this flipped coordinate system, angles rotate in the
+        // opposite direction. For example:
+        //   - Original angle 90° (counterclockwise, pointing up)
+        //   - After mirror: should become -90° (clockwise, pointing down)
+        //
+        // Without this fix, mirrored block references (like bathroom vanities with
+        // xScale=-1) would have their nested components (like sinks) positioned
+        // incorrectly, causing data to overlap instead of being mirrored symmetrically.
+        //
+        // Example verification:
+        //   - bz block with xScale=1: regtukyujh at angle 90° -> correct position
+        //   - bz block with xScale=-1: regtukyujh at angle 90° -> WRONG (overlaps with xScale=1 data)
+        //   - bz block with xScale=-1: regtukyujh at angle -90° -> CORRECT (mirrored symmetrically)
+        //
+        // This fix ensures that nested INSERTs in mirrored blocks are positioned
+        // as mirror reflections of their non-mirrored counterparts.
+        double effectiveInsertAngle = (parentXScale < 0) ? -insert.angle : insert.angle;
+        double angle = parentAngle + effectiveInsertAngle;
+
+        // Debug tracking disabled
+        bool debugThis = false;
+
+        // Handle INSERT's extrusion: when extrusion.z < 0, apply X-axis mirror
+        // This is similar to how arcs handle extrusion in applyExtrusion()
+        if (std::fabs(insert.extrusion.x) < 0.015625 &&
+            std::fabs(insert.extrusion.y) < 0.015625 &&
+            insert.extrusion.z < 0) {
+            xScale = -xScale;  // Apply X-axis mirror
+        }
 
         // Transform position
         PyCoord pos = insert.position.transform(parentPos, parentXScale, parentYScale, parentAngle);
@@ -1001,6 +1078,7 @@ private:
             expanded.radius = circle.radius * std::abs(xScale);  // Assume uniform scale for circles
             // Layer "0" inherits INSERT's layer (DWG/DXF standard)
             expanded.layer = (circle.layer == "0") ? insert.layer : circle.layer;
+
             data.expandedCircles.push_back(expanded);
         }
 
@@ -1015,16 +1093,26 @@ private:
             double startDeg = arc.startAngle * 180.0 / M_PI;
             double endDeg = arc.endAngle * 180.0 / M_PI;
 
-            // Handle vertical flip (yScale < 0)
-            if (yScale < 0) {
+            // Check arc's own extrusion: when extrusion.z < 0, mirror the arc
+            // This is the OCS (Object Coordinate System) transformation
+            bool arcMirrorX = (std::fabs(arc.extrusion.x) < 0.015625 &&
+                               std::fabs(arc.extrusion.y) < 0.015625 &&
+                               arc.extrusion.z < 0);
+
+            // Calculate effective scale considering arc's own extrusion
+            double effectiveXScale = arcMirrorX ? -xScale : xScale;
+            double effectiveYScale = yScale;
+
+            // Handle vertical flip (effectiveYScale < 0)
+            if (effectiveYScale < 0) {
                 // Flip angles: angle = 360 - angle, and swap start/end
                 double temp = 360.0 - endDeg;
                 endDeg = 360.0 - startDeg;
                 startDeg = temp;
             }
 
-            // Handle horizontal flip (xScale < 0)
-            if (xScale < 0) {
+            // Handle horizontal flip (effectiveXScale < 0)
+            if (effectiveXScale < 0) {
                 // Flip angles: angle = 180 - angle, and swap start/end
                 double temp = 180.0 - endDeg;
                 endDeg = 180.0 - startDeg;
@@ -1041,6 +1129,7 @@ private:
             while (startDeg >= 360.0) startDeg -= 360.0;
             while (endDeg < 0) endDeg += 360.0;
             while (endDeg >= 360.0) endDeg -= 360.0;
+
 
             // Convert back to radians for consistent output
             expanded.startAngle = startDeg * M_PI / 180.0;
@@ -1164,7 +1253,9 @@ private:
 
         // Recursively expand nested inserts
         for (const auto& nestedInsert : block->inserts) {
-            expandInsert(nestedInsert, pos, xScale, yScale, angle, depth - 1);
+            // Pass current handle for debug tracking
+            std::string trackHandle = debugThis ? insert.handle : parentHandle;
+            expandInsert(nestedInsert, pos, xScale, yScale, angle, depth - 1, trackHandle);
         }
     }
 };
@@ -1176,7 +1267,7 @@ PyDxfData read_dxf(const std::string& filename, bool expand = true) {
 
     dxfRW reader(filename.c_str());
 
-    if (reader.read(&collector, false)) {
+    if (reader.read(&collector, true)) {  // ext=true: 应用 extrusion 变换
         collector.data.valid = true;
         collector.data.version = "DXF";
         if (expand) {
@@ -1196,7 +1287,7 @@ PyDxfData read_dwg(const std::string& filename, bool expand = true) {
 
     dwgR reader(filename.c_str());
 
-    if (reader.read(&collector, false)) {
+    if (reader.read(&collector, true)) {  // ext=true: 应用 extrusion 变换
         collector.data.valid = true;
 
         // Get version string
@@ -1307,7 +1398,8 @@ PYBIND11_MODULE(pydxfrw, m) {
         .def_readwrite("radius", &PyArc::radius)
         .def_readwrite("start_angle", &PyArc::startAngle)
         .def_readwrite("end_angle", &PyArc::endAngle)
-        .def_readwrite("layer", &PyArc::layer);
+        .def_readwrite("layer", &PyArc::layer)
+        .def_readwrite("extrusion", &PyArc::extrusion);
 
     // Polyline vertex
     py::class_<PyPolylineVertex>(m, "PolylineVertex")
@@ -1355,7 +1447,8 @@ PYBIND11_MODULE(pydxfrw, m) {
         .def_readwrite("y_scale", &PyInsert::yScale)
         .def_readwrite("z_scale", &PyInsert::zScale)
         .def_readwrite("angle", &PyInsert::angle)
-        .def_readwrite("layer", &PyInsert::layer);
+        .def_readwrite("layer", &PyInsert::layer)
+        .def_readwrite("extrusion", &PyInsert::extrusion);
 
     // Ellipse
     py::class_<PyEllipse>(m, "Ellipse")
